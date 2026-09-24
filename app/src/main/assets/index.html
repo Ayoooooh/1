@@ -998,3 +998,886 @@
       </div>
       <div class="chart-stats">
         <div class="mini"><div class="muted">区间起点</div><div class="v sensitive" id="rangeStartValue">—</div></div>
+        <div class="mini"><div class="muted">区间终点</div><div class="v sensitive" id="rangeEndValue">—</div></div>
+        <div class="mini"><div class="muted">区间变化</div><div class="v sensitive" id="rangeChangeValue">—</div></div>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-box" id="trendChart"></div>
+      </div>
+    </section>
+
+
+    <section class="card compare-card">
+      <div class="row between">
+        <div>
+          <h2>资产对比</h2>
+          <div class="muted" style="margin-top:4px">选择两次计算记录，查看资产增减明细</div>
+        </div>
+      </div>
+
+      <div class="compare-picker">
+        <div>
+          <label for="compareStart">起始记录</label>
+          <select id="compareStart"></select>
+        </div>
+        <div class="compare-arrow" aria-hidden="true">→</div>
+        <div>
+          <label for="compareEnd">对比记录</label>
+          <select id="compareEnd"></select>
+        </div>
+      </div>
+
+      <button type="button" class="compare-btn" id="compareBtn">开始对比</button>
+
+      <div class="compare-result" id="compareResult">
+        <div class="compare-empty">至少需要 2 条计算记录才能进行资产对比</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>历史记录</h2>
+        <span class="muted" id="trendCount">0 条</span>
+      </div>
+      <div class="trend-list" id="trendList"></div>
+    </section>
+  </div>
+
+  <nav class="tabbar" aria-label="底部导航">
+    <button type="button" class="tabbtn active" data-tab="calculatorPage">计算器</button>
+    <button type="button" class="tabbtn" data-tab="trendPage">趋势图</button>
+  </nav>
+</div>
+
+<script>
+(() => {
+
+  const PATTERN_KEY = "savings-gesture-pattern-v1";
+  const LOCK_STATE_KEY = "savings-app-lock-state-v1";
+
+  const lockScreen = document.getElementById("lockScreen");
+  const lockTitle = document.getElementById("lockTitle");
+  const lockSubtitle = document.getElementById("lockSubtitle");
+  const lockMessage = document.getElementById("lockMessage");
+  const patternWrap = document.getElementById("patternWrap");
+  const patternLines = document.getElementById("patternLines");
+  const patternDots = [...document.querySelectorAll(".pattern-dot")];
+  const resetPatternBtn = document.getElementById("resetPatternBtn");
+
+  let storedPattern = localStorage.getItem(PATTERN_KEY) || "";
+  let setupStage = storedPattern ? "unlock" : "set-first";
+  let firstPattern = "";
+  let drawing = false;
+  let selected = [];
+
+  function showLockScreen(mode="unlock"){
+    setupStage = storedPattern ? mode : "set-first";
+    document.body.classList.add("app-locked");
+    lockScreen.classList.remove("hidden");
+    privacyHidden = true;
+    localStorage.setItem(PRIVACY_KEY, "1");
+    applyPrivacy();
+    resetPatternVisual();
+    updateLockCopy();
+  }
+
+  function hideLockScreen(){
+    lockScreen.classList.add("hidden");
+    document.body.classList.remove("app-locked");
+    localStorage.setItem(LOCK_STATE_KEY, "unlocked");
+  }
+
+  function updateLockCopy(){
+    lockMessage.textContent="";
+    lockMessage.className="lock-message";
+    if(setupStage==="set-first"){
+      lockTitle.textContent="设置手势密码";
+      lockSubtitle.textContent="连接至少 4 个点";
+      resetPatternBtn.style.visibility="hidden";
+    }else if(setupStage==="set-confirm"){
+      lockTitle.textContent="确认手势密码";
+      lockSubtitle.textContent="请再次绘制刚才的手势";
+      resetPatternBtn.style.visibility="hidden";
+    }else{
+      lockTitle.textContent="手势解锁";
+      lockSubtitle.textContent="请绘制你的解锁手势";
+      resetPatternBtn.style.visibility="visible";
+    }
+  }
+
+  function centerOf(dot){
+    const wrapRect = patternWrap.getBoundingClientRect();
+    const r = dot.getBoundingClientRect();
+    return {
+      x: ((r.left + r.width/2 - wrapRect.left) / wrapRect.width) * 300,
+      y: ((r.top + r.height/2 - wrapRect.top) / wrapRect.height) * 300
+    };
+  }
+
+  function drawLines(pointer=null){
+    patternLines.innerHTML="";
+    if(!selected.length) return;
+
+    const pts = selected.map(i=>centerOf(patternDots[i-1]));
+    for(let i=0;i<pts.length-1;i++){
+      const a=pts[i],b=pts[i+1];
+      const line=document.createElementNS("http://www.w3.org/2000/svg","line");
+      line.setAttribute("x1",a.x);line.setAttribute("y1",a.y);
+      line.setAttribute("x2",b.x);line.setAttribute("y2",b.y);
+      line.setAttribute("stroke","#aebcff");
+      line.setAttribute("stroke-width","3");
+      line.setAttribute("stroke-linecap","round");
+      patternLines.appendChild(line);
+    }
+
+    if(pointer){
+      const a=pts[pts.length-1];
+      const line=document.createElementNS("http://www.w3.org/2000/svg","line");
+      line.setAttribute("x1",a.x);line.setAttribute("y1",a.y);
+      line.setAttribute("x2",pointer.x);line.setAttribute("y2",pointer.y);
+      line.setAttribute("stroke","rgba(174,188,255,.52)");
+      line.setAttribute("stroke-width","3");
+      line.setAttribute("stroke-linecap","round");
+      patternLines.appendChild(line);
+    }
+  }
+
+  function resetPatternVisual(){
+    selected=[];
+    patternDots.forEach(d=>d.classList.remove("active","error"));
+    patternLines.innerHTML="";
+  }
+
+  function addDot(dot){
+    const idx=Number(dot.dataset.index);
+    if(selected.includes(idx)) return;
+    selected.push(idx);
+    dot.classList.add("active");
+    drawLines();
+  }
+
+  function pointFromEvent(e){
+    const r=patternWrap.getBoundingClientRect();
+    return {
+      x: ((e.clientX-r.left)/r.width)*300,
+      y: ((e.clientY-r.top)/r.height)*300
+    };
+  }
+
+  function detectDot(e){
+    const target=document.elementFromPoint(e.clientX,e.clientY);
+    return target?.classList?.contains("pattern-dot") ? target : null;
+  }
+
+  function markError(msg){
+    patternDots.forEach(d=>{ if(d.classList.contains("active")) d.classList.add("error"); });
+    patternLines.querySelectorAll("line").forEach(l=>l.setAttribute("stroke","#ff9ba5"));
+    lockMessage.textContent=msg;
+    lockMessage.className="lock-message error";
+    setTimeout(()=>{ resetPatternVisual(); updateLockCopy(); },700);
+  }
+
+  function finishPattern(){
+    drawing=false;
+    if(!selected.length) return;
+
+    const pattern=selected.join("-");
+    if(selected.length<4){
+      markError("至少连接 4 个点");
+      return;
+    }
+
+    if(setupStage==="set-first"){
+      firstPattern=pattern;
+      setupStage="set-confirm";
+      lockMessage.textContent="请再次绘制确认";
+      lockMessage.className="lock-message success";
+      setTimeout(()=>{ resetPatternVisual(); updateLockCopy(); },420);
+      return;
+    }
+
+    if(setupStage==="set-confirm"){
+      if(pattern!==firstPattern){
+        firstPattern="";
+        setupStage="set-first";
+        markError("两次手势不一致，请重新设置");
+        return;
+      }
+      localStorage.setItem(PATTERN_KEY,pattern);
+      storedPattern=pattern;
+      lockMessage.textContent="设置成功";
+      lockMessage.className="lock-message success";
+      setTimeout(()=>{
+        resetPatternVisual();
+        setupStage="unlock";
+        hideLockScreen();
+      },420);
+      return;
+    }
+
+    if(pattern===storedPattern){
+      lockMessage.textContent="解锁成功";
+      lockMessage.className="lock-message success";
+      setTimeout(()=>{
+        resetPatternVisual();
+        hideLockScreen();
+      },220);
+    }else{
+      markError("手势不正确");
+    }
+  }
+
+  patternWrap.addEventListener("pointerdown",e=>{
+    const dot=detectDot(e);
+    if(!dot) return;
+    drawing=true;
+    selected=[];
+    patternDots.forEach(d=>d.classList.remove("active","error"));
+    patternLines.innerHTML="";
+    addDot(dot);
+    patternWrap.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  });
+
+  patternWrap.addEventListener("pointermove",e=>{
+    if(!drawing) return;
+    const dot=detectDot(e);
+    if(dot) addDot(dot);
+    drawLines(pointFromEvent(e));
+    e.preventDefault();
+  });
+
+  patternWrap.addEventListener("pointerup",e=>{
+    if(!drawing) return;
+    const dot=detectDot(e);
+    if(dot) addDot(dot);
+    finishPattern();
+    e.preventDefault();
+  });
+
+  patternWrap.addEventListener("pointercancel",()=>{
+    drawing=false;
+    resetPatternVisual();
+  });
+
+  resetPatternBtn.addEventListener("click",()=>{
+    const ok=confirm("确定重新设置手势密码吗？");
+    if(!ok) return;
+    localStorage.removeItem(PATTERN_KEY);
+    storedPattern="";
+    firstPattern="";
+    setupStage="set-first";
+    resetPatternVisual();
+    updateLockCopy();
+  });
+
+  const KEY = "savings-app-v1";
+  const HISTORY_KEY = "savings-app-history-v1";
+  const seed = [
+    {name:"招",amount:334244,currency:"CNY"},
+    {name:"黄",amount:341923,currency:"CNY"},
+    {name:"猛",amount:45490,currency:"CNY"},
+    {name:"猛-美元",amount:30000,currency:"USD"},
+    {name:"基",amount:4710,currency:"CNY"},
+    {name:"汇",amount:8880,currency:"HKD"},
+    {name:"桥",amount:1310,currency:"USD"},
+    {name:"港盈",amount:1230,currency:"USD"},
+    {name:"新盈",amount:961,currency:"USD"},
+    {name:"ZA",amount:3803,currency:"USD"},
+    {name:"致",amount:35329,currency:"USD"}
+  ];
+  const state = {
+    accounts: JSON.parse(localStorage.getItem(KEY) || "null") || seed,
+    history: JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"),
+    usdRate: parseFloat(localStorage.getItem("usdRate") || "6.6998"),
+    hkdRate: parseFloat(localStorage.getItem("hkdRate") || "0.858126")
+  };
+
+  const $ = s => document.querySelector(s);
+  const accountsEl = $("#accounts");
+  const PRIVACY_KEY = "savings-privacy-hidden-v1";
+  let privacyHidden = localStorage.getItem(PRIVACY_KEY) !== "0";
+
+  function applyPrivacy(){
+    document.body.classList.toggle("privacy-hidden", privacyHidden);
+    const btn = $("#privacyBtn");
+    if(btn){
+      btn.classList.toggle("is-hidden", privacyHidden);
+      btn.setAttribute("aria-label", privacyHidden ? "显示资产" : "隐藏资产");
+      btn.title = privacyHidden ? "显示资产" : "隐藏资产";
+    }
+    document.querySelectorAll("input.amount").forEach(el=>{
+      el.setAttribute("aria-label", privacyHidden ? "已隐藏金额" : "金额");
+    });
+  }
+
+  function togglePrivacy(){
+    privacyHidden = !privacyHidden;
+    localStorage.setItem(PRIVACY_KEY, privacyHidden ? "1" : "0");
+    applyPrivacy();
+  }
+
+  $("#privacyBtn")?.addEventListener("click", togglePrivacy);
+  $("#lockBtn")?.addEventListener("click",()=>showLockScreen("unlock"));
+  $("#usdRate").value = state.usdRate;
+  $("#hkdRate").value = state.hkdRate;
+
+  function n(v){ const x=parseFloat(String(v).replace(/,/g,"")); return Number.isFinite(x)?x:0; }
+  function fmt(v, digits=0){ return new Intl.NumberFormat("zh-CN",{maximumFractionDigits:digits,minimumFractionDigits:digits}).format(v); }
+  function rates(){
+    state.usdRate = Math.max(0,n($("#usdRate").value));
+    state.hkdRate = Math.max(0,n($("#hkdRate").value));
+    localStorage.setItem("usdRate",state.usdRate);
+    localStorage.setItem("hkdRate",state.hkdRate);
+  }
+  function totals(){
+    rates();
+    let cny=0,usd=0,hkd=0;
+    state.accounts.forEach(a=>{
+      const v=Math.max(0,n(a.amount));
+      if(a.currency==="USD") usd+=v;
+      else if(a.currency==="HKD") hkd+=v;
+      else cny+=v;
+    });
+    const total = cny + usd*state.usdRate + hkd*state.hkdRate;
+    return {cny,usd,hkd,total};
+  }
+  function persist(){
+    localStorage.setItem(KEY,JSON.stringify(state.accounts));
+  }
+
+  function localDateKey(isoOrDate){
+    const d = isoOrDate ? new Date(isoOrDate) : new Date();
+    const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function saveCalculation(){
+    const t = totals();
+    const record = {
+      time:new Date().toISOString(),
+      total:t.total,
+      cny:t.cny,
+      usd:t.usd,
+      hkd:t.hkd,
+      usdRate:state.usdRate,
+      hkdRate:state.hkdRate,
+      accounts:state.accounts.map(a=>({
+        name:String(a.name || "未命名账户"),
+        amount:Math.max(0,n(a.amount)),
+        currency:a.currency || "CNY"
+      })),
+      source:"manual_calculation"
+    };
+    state.history.push(record);
+    state.history.sort((a,b)=>new Date(a.time)-new Date(b.time));
+    localStorage.setItem(HISTORY_KEY,JSON.stringify(state.history));
+    renderTrend();
+    const hint=$("#calcHint");
+    if(hint){
+      hint.textContent=`已记录：¥${fmt(t.total)} · ${new Date().toLocaleString("zh-CN")}`;
+      setTimeout(()=>{ hint.textContent="计算后将本次资产结果记录到趋势中"; },3000);
+    }
+  }
+
+  function renderAccounts(){
+    accountsEl.innerHTML="";
+    state.accounts.forEach((a,i)=>{
+      const wrap=document.createElement("div"); wrap.className="acct";
+      wrap.innerHTML = `
+        <div class="acct-main">
+          <input class="name" aria-label="资产账户名称" value="${String(a.name).replace(/"/g,"&quot;")}">
+          <input class="amount" aria-label="金额" inputmode="decimal" value="${a.amount}">
+          <select class="currency" aria-label="币种">
+            <option value="CNY"${a.currency==="CNY"?" selected":""}>人民币</option>
+            <option value="USD"${a.currency==="USD"?" selected":""}>美元</option>
+            <option value="HKD"${a.currency==="HKD"?" selected":""}>港币</option>
+          </select>
+          <button type="button" class="iconbtn" aria-label="删除资产账户">×</button>
+        </div>`;
+      const [name,amount,currency,del]=wrap.querySelectorAll("input,select,button");
+      name.addEventListener("input",()=>{state.accounts[i].name=name.value;persist();});
+      amount.addEventListener("input",()=>{state.accounts[i].amount=n(amount.value);persist();update();});
+      currency.addEventListener("change",()=>{state.accounts[i].currency=currency.value;persist();update();});
+      del.addEventListener("click",()=>{state.accounts.splice(i,1);persist();renderAccounts();update();});
+      accountsEl.appendChild(wrap);
+      applyPrivacy();
+    });
+  }
+
+  function renderHistory(){
+    // 历史记录统一展示在“趋势图”Tab。
+    renderTrend();
+  }
+
+  function update(){
+    const t=totals();
+    $("#grandTotal").textContent="¥"+fmt(t.total);
+    $("#sumCny").textContent="¥"+fmt(t.cny);
+    $("#sumUsd").textContent="$"+fmt(t.usd);
+    $("#sumHkd").textContent="HK$"+fmt(t.hkd);
+    const last=state.history[state.history.length-1];
+    const deltaEl=$("#deltaText");
+    if(last){
+      const d=t.total-last.total;
+      deltaEl.textContent=(d>=0?"+":"")+fmt(d)+" 元 vs 上次快照";
+      deltaEl.className="delta "+(d>=0?"good":"bad");
+      $("#updateTime").textContent="上次保存："+new Date(last.time).toLocaleString("zh-CN");
+    }else{
+      deltaEl.textContent="";
+      $("#updateTime").textContent="还没有历史记录";
+    }
+  }
+
+  $("#usdRate").addEventListener("input",update);
+  $("#hkdRate").addEventListener("input",update);
+  $("#addBtn").addEventListener("click",()=>{
+    state.accounts.push({name:"新资产账户",amount:0,currency:"CNY"});
+    persist(); renderAccounts(); update();
+    setTimeout(()=>accountsEl.lastElementChild?.querySelector("input")?.focus(),0);
+  });
+
+  const FX_DATE_KEY = "fxLastDate-v1";
+  const FX_TIME_KEY = "fxLastTime-v1";
+
+  function todayKey(){
+    const d = new Date();
+    const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function setRateStatus(text){ $("#rateStatus").textContent = text; }
+
+  async function fetchLatestRates(force=false){
+    const today = todayKey();
+    const lastDate = localStorage.getItem(FX_DATE_KEY);
+    const lastTime = localStorage.getItem(FX_TIME_KEY);
+
+    if(!force && lastDate === today){
+      setRateStatus(lastTime ? `今日已自动更新 · ${lastTime}` : "今日已自动更新");
+      return;
+    }
+
+    const btn=$("#refreshRates");
+    btn.disabled=true;
+    btn.textContent="刷新中…";
+    setRateStatus("正在获取最新今日汇率…");
+
+    try{
+      // Open Exchange Rate API: no app key required, daily reference rates.
+      // Use USD as base, then derive CNY per USD and CNY per HKD.
+      const res = await fetch("https://open.er-api.com/v6/latest/USD", {cache:"no-store"});
+      if(!res.ok) throw new Error("HTTP "+res.status);
+      const data = await res.json();
+      if(data.result !== "success" || !data.rates || !data.rates.CNY || !data.rates.HKD){
+        throw new Error("今日汇率数据无效");
+      }
+
+      const usdCny = Number(data.rates.CNY);
+      const hkdCny = Number(data.rates.CNY) / Number(data.rates.HKD);
+      if(!Number.isFinite(usdCny) || !Number.isFinite(hkdCny) || usdCny<=0 || hkdCny<=0){
+        throw new Error("今日汇率计算失败");
+      }
+
+      state.usdRate = usdCny;
+      state.hkdRate = hkdCny;
+      $("#usdRate").value = usdCny.toFixed(4);
+      $("#hkdRate").value = hkdCny.toFixed(6);
+      localStorage.setItem("usdRate", state.usdRate);
+      localStorage.setItem("hkdRate", state.hkdRate);
+
+      const now = new Date();
+      const t = now.toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
+      localStorage.setItem(FX_DATE_KEY, today);
+      localStorage.setItem(FX_TIME_KEY, t);
+      setRateStatus(`今日最新今日汇率 · ${t}`);
+      update();
+    }catch(err){
+      const last = localStorage.getItem(FX_TIME_KEY);
+      setRateStatus(last ? `获取失败，使用上次今日汇率 · ${last}` : "获取失败，使用当前今日汇率");
+    }finally{
+      btn.disabled=false;
+      btn.textContent="立即刷新";
+    }
+  }
+
+  $("#refreshRates").addEventListener("click",()=>fetchLatestRates(true));
+
+  $("#calculateBtn").addEventListener("click",()=>{
+    update();
+    saveCalculation();
+  });
+
+  let trendRangeMode="day";
+  let customStartDate="";
+  let customEndDate="";
+
+  function startOfDay(d){
+    const x=new Date(d); x.setHours(0,0,0,0); return x;
+  }
+  function startOfWeek(d){
+    const x=startOfDay(d);
+    const day=(x.getDay()+6)%7;
+    x.setDate(x.getDate()-day);
+    return x;
+  }
+  function startOfMonth(d){ const x=new Date(d); x.setHours(0,0,0,0); x.setDate(1); return x; }
+  function startOfYear(d){ const x=new Date(d); x.setHours(0,0,0,0); x.setMonth(0,1); return x; }
+
+  function bucketKey(date, mode){
+    const d=new Date(date);
+    const y=d.getFullYear();
+    const m=String(d.getMonth()+1).padStart(2,"0");
+    const day=String(d.getDate()).padStart(2,"0");
+    if(mode==="day") return `${y}-${m}-${day}`;
+    if(mode==="month") return `${y}-${m}`;
+    if(mode==="year") return `${y}`;
+    if(mode==="week"){
+      const s=startOfWeek(d);
+      const sy=s.getFullYear(), sm=String(s.getMonth()+1).padStart(2,"0"), sd=String(s.getDate()).padStart(2,"0");
+      return `${sy}-${sm}-${sd}`;
+    }
+    return `${y}-${m}-${day}`;
+  }
+
+  function bucketLabel(key, mode){
+    if(mode==="day"){
+      const [y,m,d]=key.split("-");
+      return `${Number(m)}月${Number(d)}日`;
+    }
+    if(mode==="week"){
+      const s=new Date(key+"T00:00:00");
+      const e=new Date(s); e.setDate(e.getDate()+6);
+      return `${s.getMonth()+1}/${s.getDate()}–${e.getMonth()+1}/${e.getDate()}`;
+    }
+    if(mode==="month"){
+      const [y,m]=key.split("-");
+      return `${y}年${Number(m)}月`;
+    }
+    if(mode==="year") return `${key}年`;
+    return key;
+  }
+
+  function filteredHistory(){
+    let hist=[...(state.history||[])].sort((a,b)=>new Date(a.time)-new Date(b.time));
+    if(trendRangeMode==="custom"){
+      if(customStartDate){
+        const s=new Date(customStartDate+"T00:00:00");
+        hist=hist.filter(h=>new Date(h.time)>=s);
+      }
+      if(customEndDate){
+        const e=new Date(customEndDate+"T23:59:59.999");
+        hist=hist.filter(h=>new Date(h.time)<=e);
+      }
+      return hist;
+    }
+
+    // 天/周/月/年 = 聚合全部历史到对应时间粒度，取每个周期最后一次计算结果
+    const map=new Map();
+    hist.forEach(h=>map.set(bucketKey(h.time,trendRangeMode),h));
+    return [...map.entries()].map(([key,h])=>({...h,_bucketKey:key,_label:bucketLabel(key,trendRangeMode)}));
+  }
+
+
+  function historyLabel(h){
+    const d=new Date(h.time);
+    return `${d.toLocaleDateString("zh-CN")} ${d.toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"})}`;
+  }
+
+  function populateCompareOptions(){
+    const start=$("#compareStart");
+    const end=$("#compareEnd");
+    if(!start || !end) return;
+
+    const hist=[...(state.history||[])].sort((a,b)=>new Date(a.time)-new Date(b.time));
+    const previousStart=start.value;
+    const previousEnd=end.value;
+
+    start.innerHTML="";
+    end.innerHTML="";
+
+    hist.forEach((h,i)=>{
+      const label=`${historyLabel(h)} · ¥${fmt(h.total)}`;
+      const a=document.createElement("option");
+      a.value=String(i);
+      a.textContent=label;
+      start.appendChild(a);
+
+      const b=document.createElement("option");
+      b.value=String(i);
+      b.textContent=label;
+      end.appendChild(b);
+    });
+
+    if(hist.length>=2){
+      start.value = previousStart && Number(previousStart)<hist.length ? previousStart : "0";
+      end.value = previousEnd && Number(previousEnd)<hist.length ? previousEnd : String(hist.length-1);
+    }
+    start.disabled=hist.length<2;
+    end.disabled=hist.length<2;
+    $("#compareBtn").disabled=hist.length<2;
+  }
+
+  function accountValueCny(account, record){
+    const amount=Number(account.amount)||0;
+    if(account.currency==="USD") return amount*(Number(record.usdRate)||state.usdRate);
+    if(account.currency==="HKD") return amount*(Number(record.hkdRate)||state.hkdRate);
+    return amount;
+  }
+
+  function accountDisplay(account){
+    const val=Number(account.amount)||0;
+    if(account.currency==="USD") return `$${fmt(val)}`;
+    if(account.currency==="HKD") return `HK$${fmt(val)}`;
+    return `¥${fmt(val)}`;
+  }
+
+  function renderComparison(){
+    const result=$("#compareResult");
+    if(!result) return;
+
+    const hist=[...(state.history||[])].sort((a,b)=>new Date(a.time)-new Date(b.time));
+    if(hist.length<2){
+      result.innerHTML='<div class="compare-empty">至少需要 2 条计算记录才能进行资产对比</div>';
+      return;
+    }
+
+    let s=Number($("#compareStart").value);
+    let e=Number($("#compareEnd").value);
+    if(!Number.isInteger(s) || !Number.isInteger(e) || !hist[s] || !hist[e]){
+      result.innerHTML='<div class="compare-empty">请选择有效的两条记录</div>';
+      return;
+    }
+    if(s===e){
+      result.innerHTML='<div class="compare-empty">请选择两个不同时间点进行对比</div>';
+      return;
+    }
+
+    if(s>e){ [s,e]=[e,s]; }
+
+    const a=hist[s], b=hist[e];
+    const totalDelta=(Number(b.total)||0)-(Number(a.total)||0);
+    const pct=(Number(a.total)||0)!==0 ? totalDelta/Number(a.total)*100 : null;
+
+    let html=`
+      <div class="compare-summary">
+        <div class="mini">
+          <div class="muted">起始资产</div>
+          <div class="v sensitive">¥${fmt(a.total)}</div>
+          <div class="muted" style="margin-top:4px">${historyLabel(a)}</div>
+        </div>
+        <div class="mini">
+          <div class="muted">对比资产</div>
+          <div class="v sensitive">¥${fmt(b.total)}</div>
+          <div class="muted" style="margin-top:4px">${historyLabel(b)}</div>
+        </div>
+        <div class="mini">
+          <div class="muted">总变化</div>
+          <div class="v compare-big sensitive ${totalDelta>=0?"good":"bad"}">${totalDelta>=0?"+":""}¥${fmt(totalDelta)}</div>
+          <div class="muted" style="margin-top:4px">${pct===null?"—":`${pct>=0?"+":""}${pct.toFixed(2)}%`}</div>
+        </div>
+      </div>`;
+
+    if(!Array.isArray(a.accounts) || !Array.isArray(b.accounts)){
+      html+=`<div class="compare-note">所选日期中至少有一条是旧版历史记录，没有保存账户快照，因此目前只能比较总资产。以后点击“计算总资产”生成的新记录会自动保存账户明细。</div>`;
+      result.innerHTML=html;
+      applyPrivacy();
+      return;
+    }
+
+    const names=new Set([...a.accounts.map(x=>x.name),...b.accounts.map(x=>x.name)]);
+    const rows=[];
+
+    names.forEach(name=>{
+      const aa=a.accounts.find(x=>x.name===name);
+      const bb=b.accounts.find(x=>x.name===name);
+      const av=aa?accountValueCny(aa,a):0;
+      const bv=bb?accountValueCny(bb,b):0;
+      rows.push({
+        name,
+        aa,
+        bb,
+        delta:bv-av,
+        startCny:av,
+        endCny:bv
+      });
+    });
+
+    rows.sort((x,y)=>Math.abs(y.delta)-Math.abs(x.delta));
+
+    const increased=rows.filter(r=>r.delta>0.5);
+    const decreased=rows.filter(r=>r.delta<-0.5);
+    const unchanged=rows.filter(r=>Math.abs(r.delta)<=0.5);
+
+    function section(title,items,type){
+      if(!items.length) return "";
+      return `
+        <div class="compare-section">
+          <div class="compare-section-title">
+            <span>${title}</span>
+            <span class="compare-count">${items.length} 项</span>
+          </div>
+          ${items.map(r=>`
+            <div class="compare-item">
+              <div>
+                <div class="compare-name">${r.name}</div>
+                <div class="compare-values sensitive">
+                  ${r.aa?accountDisplay(r.aa):"无"} → ${r.bb?accountDisplay(r.bb):"无"}
+                </div>
+              </div>
+              <div class="compare-delta sensitive ${type}">
+                ${r.delta>0?"+":""}¥${fmt(r.delta)}
+              </div>
+            </div>
+          `).join("")}
+        </div>`;
+    }
+
+    html+=section("增加",increased,"good");
+    html+=section("减少",decreased,"bad");
+    html+=section("基本不变",unchanged,"neutral");
+
+    result.innerHTML=html;
+    applyPrivacy();
+  }
+
+  $("#compareBtn")?.addEventListener("click",renderComparison);
+
+  function renderTrend(){
+    populateCompareOptions();
+    const hist = filteredHistory();
+    const chart = $("#trendChart");
+    const list = $("#trendList");
+    $("#trendCount").textContent = `${hist.length} 条`;
+
+    if(!hist.length){
+      $("#trendCurrent").textContent = "¥0";
+      $("#trendRange").textContent = "暂无历史数据";
+      $("#trendDelta").textContent = "";
+      $("#rangeStartValue").textContent="—";
+      $("#rangeEndValue").textContent="—";
+      $("#rangeChangeValue").textContent="—";
+      $("#rangeChangeValue").className="v sensitive";
+      chart.innerHTML = '<div class="chart-empty">在“计算器”中点击“计算总资产”后生成历史记录</div>';
+      list.innerHTML = '<div class="empty">暂无历史记录</div>';
+      return;
+    }
+
+    const latest = hist[hist.length-1];
+    $("#trendCurrent").textContent = "¥"+fmt(latest.total);
+    const firstDate = hist[0]._label || new Date(hist[0].time).toLocaleDateString("zh-CN");
+    const lastDate = latest._label || new Date(latest.time).toLocaleDateString("zh-CN");
+    $("#trendRange").textContent = hist.length===1 ? firstDate : `${firstDate} — ${lastDate}`;
+
+    if(hist.length > 1){
+      const prev = hist[hist.length-2];
+      const d = latest.total - prev.total;
+      const el = $("#trendDelta");
+      el.textContent = `${d>=0?"+":""}${fmt(d)} 元`;
+      el.className = "trend-delta " + (d>=0 ? "good" : "bad");
+    }else{
+      $("#trendDelta").textContent = "首日记录";
+      $("#trendDelta").className = "trend-delta muted";
+    }
+
+    // SVG line chart
+    const W=640,H=240,padL=18,padR=18,padT=20,padB=34;
+    const vals=hist.map(h=>Number(h.total)||0);
+    let min=Math.min(...vals), max=Math.max(...vals);
+    if(max===min){ max += 1; min -= 1; }
+    const range=max-min;
+    min -= range*0.12; max += range*0.12;
+    const x = i => hist.length===1 ? W/2 : padL + i*(W-padL-padR)/(hist.length-1);
+    const y = v => padT + (max-v)*(H-padT-padB)/(max-min);
+    const pts = vals.map((v,i)=>`${x(i)},${y(v)}`).join(" ");
+
+    const circles = vals.map((v,i)=>
+      `<circle cx="${x(i)}" cy="${y(v)}" r="${i===vals.length-1?5:3.5}" fill="currentColor">
+        <title>${hist[i]._label || new Date(hist[i].time).toLocaleString("zh-CN")} · ¥${fmt(v)}</title>
+      </circle>`).join("");
+
+    const gridYs=[0,0.5,1].map(t=>{
+      const gy=padT+t*(H-padT-padB);
+      const gv=max-t*(max-min);
+      return `<line x1="${padL}" x2="${W-padR}" y1="${gy}" y2="${gy}" stroke="var(--viz-border, #e8eaf0)" stroke-width="1"/>
+      <text x="${padL}" y="${gy-5}" font-size="11" fill="var(--viz-muted, #7c8492)">¥${fmt(gv)}</text>`;
+    }).join("");
+
+    chart.innerHTML = `
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="资产走势图">
+        ${gridYs}
+        <polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+        <g style="color:var(--accent)">${circles}</g>
+        <text x="${padL}" y="${H-8}" font-size="11" fill="var(--muted)">${hist[0]._label || new Date(hist[0].time).toLocaleDateString("zh-CN")}</text>
+        <text x="${W-padR}" y="${H-8}" text-anchor="end" font-size="11" fill="var(--muted)">${latest._label || new Date(latest.time).toLocaleDateString("zh-CN")}</text>
+      </svg>`;
+
+    $("#rangeStartValue").textContent = "¥"+fmt(hist[0].total);
+    $("#rangeEndValue").textContent = "¥"+fmt(latest.total);
+    const totalChange=latest.total-hist[0].total;
+    const rc=$("#rangeChangeValue");
+    rc.textContent=(totalChange>=0?"+":"")+fmt(totalChange)+" 元";
+    rc.className="v sensitive "+(totalChange>=0?"good":"bad");
+
+    list.innerHTML = "";
+    hist.slice().reverse().forEach((h,idx)=>{
+      const originalIndex = hist.length-1-idx;
+      const prev = originalIndex>0 ? hist[originalIndex-1] : null;
+      const d = prev ? h.total-prev.total : null;
+      const row=document.createElement("div");
+      row.className="trend-row";
+      row.innerHTML = `
+        <div>
+          <div class="trend-value sensitive">¥${fmt(h.total)}</div>
+          <div class="trend-date">${h._label || new Date(h.time).toLocaleString("zh-CN")}</div>
+        </div>
+        <div class="${d===null?"muted":(d>=0?"good":"bad")}" style="font-size:13px;font-weight:650;text-align:right">
+          ${d===null?"首日记录":`${d>=0?"+":""}${fmt(d)} 元`}
+        </div>`;
+      list.appendChild(row);
+    });
+  }
+
+
+  const rangeLabels={day:"按天查看",week:"按周查看",month:"按月查看",year:"按年查看",custom:"自定义时间"};
+  document.querySelectorAll(".rangebtn").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      trendRangeMode=btn.dataset.range;
+      document.querySelectorAll(".rangebtn").forEach(b=>b.classList.toggle("active",b===btn));
+      $("#trendModeText").textContent=rangeLabels[trendRangeMode]||"趋势";
+      $("#customRange").classList.toggle("show",trendRangeMode==="custom");
+      if(trendRangeMode!=="custom") renderTrend();
+    });
+  });
+
+  $("#applyCustom").addEventListener("click",()=>{
+    customStartDate=$("#customStart").value;
+    customEndDate=$("#customEnd").value;
+    if(customStartDate && customEndDate && customStartDate>customEndDate){
+      alert("开始日期不能晚于结束日期");
+      return;
+    }
+    renderTrend();
+  });
+
+  function switchTab(id){
+    document.querySelectorAll(".tabpage").forEach(p=>p.classList.toggle("active",p.id===id));
+    document.querySelectorAll(".tabbtn").forEach(b=>b.classList.toggle("active",b.dataset.tab===id));
+    if(id==="trendPage") renderTrend();
+    window.scrollTo({top:0,behavior:"smooth"});
+  }
+
+  document.querySelectorAll(".tabbtn").forEach(btn=>{
+    btn.addEventListener("click",()=>switchTab(btn.dataset.tab));
+  });
+
+  if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+    navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  }
+  renderAccounts(); renderHistory(); update(); renderTrend(); applyPrivacy();
+  showLockScreen(storedPattern ? "unlock" : "set-first");
+  fetchLatestRates(false);
+})();
+</script>
+</body>
+</html>
